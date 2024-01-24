@@ -75,7 +75,7 @@ func startAll() {
 						)
 						err := copyDir(session.Dir, destDir)
 						if err != nil {
-							log.Fatal("fialed to copy ", session.Dir, " to ", destDir)
+							log.Fatal("failed to copy ", session.Dir, " to ", destDir, ": ", err)
 						}
 					}
 				default:
@@ -90,7 +90,7 @@ func startAll() {
 						)
 						err := copyFile(event.Name, destFile)
 						if err != nil {
-							log.Fatal("fialed to copy ", event.Name, " to ", destFile, ": ", err)
+							log.Fatal("failed to copy ", event.Name, " to ", destFile, ": ", err)
 						}
 					}
 				}
