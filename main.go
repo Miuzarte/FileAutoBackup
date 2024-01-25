@@ -62,10 +62,11 @@ func startAll() {
 
 		err := watch(
 			session.Dir, session.Files, func(event fsnotify.Event) {
+				time.Sleep(time.Second) //等待更新方写入
 				switch len(session.Files) {
 				case 0:
 					if time.Since(session.lastBackupTime) < session.MinimumInterval && session.lastBackupTime != launchTime {
-						log.Info(session.Dir, " changed again but less than ", session.MinimumInterval)
+						log.Debug(session.Dir, " changed again but less than ", session.MinimumInterval)
 					} else {
 						log.Info(session.Dir, " changed again after ", time.Since(session.lastBackupTime))
 						session.lastBackupTime = time.Now()
@@ -80,7 +81,7 @@ func startAll() {
 					}
 				default:
 					if time.Since(session.lastBackupTime) < session.MinimumInterval && session.lastBackupTime != launchTime {
-						log.Info(event.Name, " changed again but less than ", session.MinimumInterval)
+						log.Debug(event.Name, " changed again but less than ", session.MinimumInterval)
 					} else {
 						log.Info(session.Dir, " changed again after ", time.Since(session.lastBackupTime))
 						session.lastBackupTime = time.Now()
