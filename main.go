@@ -4,15 +4,13 @@ import (
 	"FileAutoBackup/SimpleLogFormatter"
 	"flag"
 	"fmt"
+	"os"
+	fp "path/filepath"
+	"strconv"
+	"time"
+
 	"github.com/fsnotify/fsnotify"
 	log "github.com/sirupsen/logrus"
-	"io"
-	"os"
-	"path/filepath"
-	"slices"
-	"strconv"
-	"sync"
-	"time"
 )
 
 type flags struct {
@@ -31,6 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	startAll()
 	log.Info("Listening...")
 	<-make(chan struct{})
@@ -45,56 +44,32 @@ func initLogger() {
 
 func initFlag() (f flags) {
 	f = flags{}
-	c := flag.String("c", "", "配置文件路径, 默认为程序目录下的config.yaml")
+	c := flag.String("c", "", "配置文件路径, 默认为程序目录下的 config.yaml")
+	d := flag.Bool("debug", false, "debug mode~")
+	t := flag.Bool("trace", false, "trace mode!")
 	flag.Parse()
 	if *c != "" {
 		f.configPath = *c
 	}
+	if *d {
+		log.SetLevel(log.DebugLevel)
+	}
+	if *t {
+		log.SetLevel(log.TraceLevel)
+	}
+
+	if *d && *t {
+		log.Panic("y u bully me")
+	}
+
 	return f
 }
 
 func startAll() {
 	for key, session := range config {
-		if session.MinimumInterval <= time.Second {
-			session.MinimumInterval = time.Second
-		}
-		session.lastBackupTime = launchTime
-
 		err := watch(
 			session.Dir, session.Files, func(event fsnotify.Event) {
-				time.Sleep(time.Second) //等待更新方写入
-				switch len(session.Files) {
-				case 0:
-					if time.Since(session.lastBackupTime) < session.MinimumInterval && session.lastBackupTime != launchTime {
-						log.Debug(session.Dir, " changed again but less than ", session.MinimumInterval)
-					} else {
-						log.Info(session.Dir, " changed again after ", time.Since(session.lastBackupTime))
-						session.lastBackupTime = time.Now()
-
-						destDir := filepath.Join(
-							session.CopyTo, strconv.FormatInt(time.Now().Unix(), 10), filepath.Base(session.Dir),
-						)
-						err := copyDir(session.Dir, destDir)
-						if err != nil {
-							log.Error("failed to copy ", session.Dir, " to ", destDir, ": ", err)
-						}
-					}
-				default:
-					if time.Since(session.lastBackupTime) < session.MinimumInterval && session.lastBackupTime != launchTime {
-						log.Debug(event.Name, " changed again but less than ", session.MinimumInterval)
-					} else {
-						log.Info(session.Dir, " changed again after ", time.Since(session.lastBackupTime))
-						session.lastBackupTime = time.Now()
-
-						destFile := filepath.Join(
-							session.CopyTo, strconv.FormatInt(time.Now().Unix(), 10), filepath.Base(event.Name),
-						)
-						err := copyFile(event.Name, destFile)
-						if err != nil {
-							log.Error("failed to copy ", event.Name, " to ", destFile, ": ", err)
-						}
-					}
-				}
+				sessionHandler(session, event)
 			},
 		)
 		if err != nil {
@@ -103,106 +78,75 @@ func startAll() {
 	}
 }
 
-func copyFile(src, dest string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
+func sessionHandler(s *Session, event fsnotify.Event) {
+	times := strconv.FormatInt(time.Now().Unix(), 10)
 
-	destDir, _ := filepath.Split(dest)
-	_, err = os.Stat(destDir)
-	if os.IsNotExist(err) {
-		err := os.MkdirAll(destDir, os.ModePerm)
-		if err != nil {
-			return err
+	switch len(s.Files) {
+	case 0: // 备份整个文件夹
+		if time.Since(s.lastBackupTime) < s.MinimumInterval && s.lastBackupTime != launchTime {
+			log.Debug(s.Dir, " changed again but less than ", s.MinimumInterval)
+			return
 		}
-	}
 
-	destinationFile, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer destinationFile.Close()
+		log.Info(s.Dir, " changed again after ", time.Since(s.lastBackupTime))
+		s.lastBackupTime = time.Now()
 
-	_, err = io.Copy(destinationFile, sourceFile)
-	return err
-}
+		time.Sleep(time.Second) //等待更新方写入
 
-func copyDir(src, dest string) error {
-	err := os.MkdirAll(dest, os.ModePerm)
-	if err != nil {
-		return err
-	}
-
-	return filepath.Walk(
-		src, func(path string, info os.FileInfo, err error) error {
+		if s.Compression {
+			destPathInTar := fp.ToSlash(fp.Join(times))
+			destTar := fp.ToSlash(fp.Join(s.CopyTo, times+".tar.gz"))
+			err := archiveFiles([]string{s.Dir}, destPathInTar, destTar)
 			if err != nil {
-				return err
+				log.Error("failed to archive ", s.Dir, " to ", destTar, ": ", err)
 			}
 
-			destinationPath := filepath.Join(dest, path[len(src):])
-
-			if info.IsDir() {
-				return os.MkdirAll(destinationPath, os.ModePerm)
-			} else {
-				return copyFile(path, destinationPath)
+		} else {
+			destDir := fp.Join(s.CopyTo, times, fp.Base(s.Dir))
+			err := copyDir(s.Dir, destDir)
+			if err != nil {
+				log.Error("failed to copy ", s.Dir, " to ", destDir, ": ", err)
 			}
-		},
-	)
+		}
+
+	default: // 备份个别文件
+		if time.Since(s.lastBackupTime) < s.MinimumInterval && s.lastBackupTime != launchTime {
+			log.Debug(event.Name, " changed again but less than ", s.MinimumInterval)
+			return
+		}
+
+		log.Info(s.Dir, " changed again after ", time.Since(s.lastBackupTime))
+		s.lastBackupTime = time.Now()
+
+		time.Sleep(time.Second) //等待更新方写入
+
+		if s.Compression {
+			destPathInTar := fp.ToSlash(fp.Join(times))
+			destTar := fp.ToSlash(fp.Join(s.CopyTo, times+".tar.gz"))
+			err := archiveFiles([]string{event.Name}, destPathInTar, destTar)
+			if err != nil {
+				log.Error("failed to archive ", event.Name, " to ", destTar, ": ", err)
+			}
+
+		} else {
+			destFile := fp.Join(s.CopyTo, times, fp.Base(event.Name))
+			err := copyFile(event.Name, destFile)
+			if err != nil {
+				log.Error("failed to copy ", event.Name, " to ", destFile, ": ", err)
+			}
+		}
+
+	}
 }
 
-func watch(dir string, names []string, f func(fsnotify.Event)) (err error) {
-	if f == nil {
-		return fmt.Errorf("nil callback error")
-	}
-	initErr := make(chan error)
-	go func() {
-		watcher, err := fsnotify.NewWatcher()
+func safeCreate(name string) (*os.File, error) {
+	_, err := os.Stat(name)
+	if os.IsNotExist(err) {
+		err := os.MkdirAll(fp.Dir(name), os.ModePerm)
 		if err != nil {
-			initErr <- err
-			return
+			return nil, fmt.Errorf("failed to mkdir: %w", err)
 		}
-		err = watcher.Add(dir)
-		if err != nil {
-			initErr <- err
-			return
-		}
-		initErr <- nil
-		defer func(watcher *fsnotify.Watcher) {
-			if err := watcher.Close(); err != nil {
-				log.Error("failed to close watcher: ", err)
-			}
-		}(watcher)
-
-		eventWG := sync.WaitGroup{}
-		eventWG.Add(1)
-		go func() {
-			defer eventWG.Done()
-			for {
-				select {
-				case event, ok := <-watcher.Events:
-					log.Trace("File: ", event.Name, ", Op: ", event.Op, ", Ok: ", ok)
-					if !ok {
-						return
-					}
-					_, thisName := filepath.Split(event.Name)
-					if slices.Contains(names, thisName) ||
-						len(names) == 0 { //监听整个文件夹的情况
-						f(event)
-					}
-
-				case err, ok := <-watcher.Errors:
-					log.Error(err, ", Ok: ", ok)
-					return
-				}
-			}
-		}()
-		eventWG.Wait()
-	}()
-	err = <-initErr
-	if err != nil {
-		return err
 	}
-	return nil
+
+	return os.Create(name)
 }

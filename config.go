@@ -4,19 +4,21 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"os"
+	fp "path/filepath"
+	"time"
+
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
-	"os"
-	"path/filepath"
-	"time"
 )
 
-type Config map[string]Session
+type Config map[string]*Session
 
 type Session struct {
 	Dir              string        `json:"dir" yaml:"dir"`
 	Files            []string      `json:"files" yaml:"files"`
 	CopyTo           string        `json:"copyTo" yaml:"copyTo"`
+	Compression      bool          `json:"compression" yaml:"compression"`
 	MinimumInterval  time.Duration `json:"minimumInterval" yaml:"minimumInterval"`
 	TimeToDeleteOld  time.Duration `json:"timeToDeleteOld" yaml:"timeToDeleteOld"`
 	CountTodeleteOld int           `json:"countTodeleteOld" yaml:"countTodeleteOld"`
@@ -38,12 +40,12 @@ var errs = struct {
 }
 
 var (
-	homeDir, _        = filepath.Abs(filepath.Dir(os.Args[0]))
+	homeDir, _        = fp.Abs(fp.Dir(os.Args[0]))
 	defaultConfigPath = homeDir + "/" + DefaultConfigName
 )
 
 func initConfig(configPath string) (err error) {
-	homeDir, err = filepath.Abs(filepath.Dir(os.Args[0]))
+	homeDir, err = fp.Abs(fp.Dir(os.Args[0]))
 	if err != nil {
 		return fmt.Errorf("failed to get home dir: %w", err)
 	}
@@ -51,7 +53,6 @@ func initConfig(configPath string) (err error) {
 
 	switch configPath {
 	case "":
-		configPath = defaultConfigPath
 		configContent = initDefaultConfig()
 	default:
 		data, err := os.ReadFile(configPath)
@@ -65,6 +66,9 @@ func initConfig(configPath string) (err error) {
 	if err != nil {
 		return err
 	}
+
+	config.validate()
+
 	return nil
 }
 
@@ -96,4 +100,15 @@ func (cfg *Config) parse(content []byte) (err error) {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	return nil
+}
+
+func (cfg *Config) validate() {
+	for _, v := range *cfg {
+		v.lastBackupTime = launchTime
+		v.Dir = fp.ToSlash(fp.Clean(v.Dir))
+		v.CopyTo = fp.ToSlash(fp.Clean(v.CopyTo))
+		for i, s := range v.Files {
+			v.Files[i] = fp.ToSlash(fp.Clean(s))
+		}
+	}
 }

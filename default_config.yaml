@@ -3,6 +3,7 @@ palworld:
 #  files: #none for copying the whole folder
 #    - "Level.sav"
   copyTo: "D:\\Game\\SteamCMD\\steamapps\\common\\PalServer\\Pal\\Saved\\SaveGames\\0\\backup"
+  compression: true
   minimumInterval: "5m" #unit: "s", "m", "h"    , not less than 1s
   timeToDeleteOld: "168h" #Not implemented
   countTodeleteOld: 0 #Not implemented
